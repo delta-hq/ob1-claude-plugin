@@ -7,12 +7,24 @@ set -e
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
-# OB1 Console base URL (the proxy that enriches + forwards to Braintrust)
+# Mode 1: OB1 Console proxy (enriches with WorkOS identity)
 export OB1_BASE_URL="${OB1_BASE_URL:-https://console.openblocklabs.com}"
 export OB1_API_URL="${OB1_BASE_URL}/api/v1/braintrust"
-
-# Auth: OB1 API key (from console.openblocklabs.com/api-keys)
 export OB1_API_KEY="${OB1_API_KEY:-}"
+
+# Mode 2: Direct Braintrust (fallback when console isn't available)
+export BRAINTRUST_API_KEY="${BRAINTRUST_API_KEY:-}"
+
+# Resolve which auth to use: prefer OB1 proxy, fall back to direct Braintrust
+if [ -n "$OB1_API_KEY" ]; then
+  export _API_URL="$OB1_API_URL"
+  export _API_AUTH="Bearer ${OB1_API_KEY}"
+  export _API_HEADERS="-H \"X-User-Id: ${OB1_USER_ID:-}\""
+elif [ -n "$BRAINTRUST_API_KEY" ]; then
+  export _API_URL="https://api.braintrust.dev"
+  export _API_AUTH="Bearer ${BRAINTRUST_API_KEY}"
+  export _API_HEADERS=""
+fi
 
 # Logging
 LOG_DIR="${CLAUDE_PLUGIN_DATA:-${HOME}/.cache/ob1-trace}"
@@ -38,7 +50,7 @@ debug() {
 # ── Checks ──────────────────────────────────────────────────────────────────
 
 tracing_enabled() {
-  [ -n "$OB1_API_KEY" ]
+  [ -n "$OB1_API_KEY" ] || [ -n "$BRAINTRUST_API_KEY" ]
 }
 
 check_requirements() {
@@ -97,17 +109,29 @@ set_session_state() {
 CACHE_FILE="${LOG_DIR}/project_id"
 
 get_project_id() {
+  # Check env override first
+  if [ -n "${BRAINTRUST_PROJECT_ID:-}" ]; then
+    echo "$BRAINTRUST_PROJECT_ID"
+    return
+  fi
+
   # Check cache (1 hour TTL)
   if [ -f "$CACHE_FILE" ] && [ "$(find "$CACHE_FILE" -mmin -60 2>/dev/null)" ]; then
     cat "$CACHE_FILE"
     return
   fi
 
-  # Fetch from OB1 proxy (it returns the org's Braintrust project)
   local pid
-  pid=$(curl -sf "${OB1_API_URL}/api/project" \
-    -H "Authorization: Bearer ${OB1_API_KEY}" \
-    -H "X-User-Id: ${OB1_USER_ID:-}" | jq -r '.id // empty' 2>/dev/null)
+  if [ -n "$OB1_API_KEY" ]; then
+    # Fetch from OB1 proxy
+    pid=$(curl -sf "${OB1_API_URL}/api/project" \
+      -H "Authorization: Bearer ${OB1_API_KEY}" \
+      -H "X-User-Id: ${OB1_USER_ID:-}" | jq -r '.id // empty' 2>/dev/null)
+  elif [ -n "$BRAINTRUST_API_KEY" ]; then
+    # Fetch directly from Braintrust
+    pid=$(curl -sf "https://api.braintrust.dev/v1/project?limit=1" \
+      -H "Authorization: Bearer ${BRAINTRUST_API_KEY}" | jq -r '.objects[0].id // empty' 2>/dev/null)
+  fi
 
   if [ -n "$pid" ]; then
     echo "$pid" > "$CACHE_FILE"
@@ -121,18 +145,24 @@ insert_span() {
   local project_id="$1"
   local event_json="$2"
 
-  # Add project_id and log_id to the event
   local row
   row=$(echo "$event_json" | jq --arg pid "$project_id" '. + {project_id: $pid, log_id: "g"}')
 
   local payload
   payload=$(jq -n --argjson row "$row" '{rows: [$row], api_version: 2}')
 
-  curl -sf -X POST "${OB1_API_URL}/logs3" \
-    -H "Authorization: Bearer ${OB1_API_KEY}" \
-    -H "X-User-Id: ${OB1_USER_ID:-}" \
-    -H "Content-Type: application/json" \
-    -d "$payload" 2>/dev/null
+  if [ -n "$OB1_API_KEY" ]; then
+    curl -sf -X POST "${OB1_API_URL}/logs3" \
+      -H "Authorization: Bearer ${OB1_API_KEY}" \
+      -H "X-User-Id: ${OB1_USER_ID:-}" \
+      -H "Content-Type: application/json" \
+      -d "$payload" 2>/dev/null
+  elif [ -n "$BRAINTRUST_API_KEY" ]; then
+    curl -sf -X POST "https://api.braintrust.dev/logs3" \
+      -H "Authorization: Bearer ${BRAINTRUST_API_KEY}" \
+      -H "Content-Type: application/json" \
+      -d "$payload" 2>/dev/null
+  fi
 }
 
 # ── Cleanup old sessions ───────────────────────────────────────────────────
