@@ -15,15 +15,26 @@ export OB1_API_KEY="${OB1_API_KEY:-}"
 # Mode 2: Direct Braintrust (fallback when console isn't available)
 export BRAINTRUST_API_KEY="${BRAINTRUST_API_KEY:-}"
 
-# Resolve which auth to use: prefer OB1 proxy, fall back to direct Braintrust
-if [ -n "$OB1_API_KEY" ]; then
-  export _API_URL="$OB1_API_URL"
-  export _API_AUTH="Bearer ${OB1_API_KEY}"
-  export _API_HEADERS="-H \"X-User-Id: ${OB1_USER_ID:-}\""
-elif [ -n "$BRAINTRUST_API_KEY" ]; then
-  export _API_URL="https://api.braintrust.dev"
-  export _API_AUTH="Bearer ${BRAINTRUST_API_KEY}"
-  export _API_HEADERS=""
+# Auto-discover Braintrust API key from Claude settings if not explicitly set
+if [ -z "$OB1_API_KEY" ] && [ -z "$BRAINTRUST_API_KEY" ]; then
+  for _settings_file in "$HOME/.claude/settings.json" "$HOME/.claude/settings.local.json"; do
+    [ -f "$_settings_file" ] || continue
+    _found_key=$(jq -r '
+      .mcpServers.braintrust.args // [] | to_entries[] |
+      select(.value == "--api-key") | .key + 1 | tostring
+    ' "$_settings_file" 2>/dev/null)
+    if [ -n "$_found_key" ]; then
+      BRAINTRUST_API_KEY=$(jq -r ".mcpServers.braintrust.args[$_found_key] // empty" "$_settings_file" 2>/dev/null)
+      [ -n "$BRAINTRUST_API_KEY" ] && export BRAINTRUST_API_KEY && break
+    fi
+    # Also check env block
+    _env_key=$(jq -r '.env.BRAINTRUST_API_KEY // empty' "$_settings_file" 2>/dev/null)
+    if [ -n "$_env_key" ]; then
+      BRAINTRUST_API_KEY="$_env_key"
+      export BRAINTRUST_API_KEY
+      break
+    fi
+  done
 fi
 
 # Logging
