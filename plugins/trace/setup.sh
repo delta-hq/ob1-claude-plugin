@@ -1,63 +1,59 @@
 #!/bin/bash
-# OB1 Trace Plugin — interactive setup
+# OB1 Trace Plugin — setup
+# Wires trace hooks directly into ~/.claude/settings.json
 set -e
 
 echo "==> OB1 Trace Setup"
-echo ""
 
 # Check requirements
-for cmd in jq curl; do
+for cmd in jq curl python3; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "Error: $cmd is required. Install with: brew install $cmd"
     exit 1
   fi
 done
 
-# Get OB1 API key
-if [ -z "${OB1_API_KEY:-}" ]; then
-  echo "Enter your OB1 API key (from console.openblocklabs.com/api-keys):"
-  read -r -p "  > " OB1_API_KEY
-fi
+# Find the hooks directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOOKS_DIR="$SCRIPT_DIR/hooks"
 
-if [ -z "$OB1_API_KEY" ]; then
-  echo "Error: OB1 API key is required."
+if [ ! -f "$HOOKS_DIR/session_start.sh" ]; then
+  echo "Error: hooks not found at $HOOKS_DIR"
   exit 1
 fi
 
-# Console URL
-OB1_BASE_URL="${OB1_BASE_URL:-https://console.openblocklabs.com}"
-echo ""
-echo "Console URL: $OB1_BASE_URL"
+# Wire hooks into settings.json
+SETTINGS="$HOME/.claude/settings.json"
+[ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
 
-# Test connection
-echo "Testing connection..."
-STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
-  "${OB1_BASE_URL}/api/v1/braintrust/api/project" \
-  -H "Authorization: Bearer ${OB1_API_KEY}" \
-  -H "X-User-Id: setup" 2>/dev/null || echo "000")
+python3 -c "
+import json, sys
+hooks_dir = '$HOOKS_DIR'
+with open('$SETTINGS') as f:
+    s = json.load(f)
+s['hooks'] = s.get('hooks', {})
+s['hooks']['SessionStart'] = [{'hooks': [{'type': 'command', 'command': f'bash {hooks_dir}/session_start.sh', 'async': True}]}]
+s['hooks']['UserPromptSubmit'] = [{'hooks': [{'type': 'command', 'command': f'bash {hooks_dir}/user_prompt_submit.sh', 'async': True}]}]
+s['hooks']['PostToolUse'] = [{'matcher': '*', 'hooks': [{'type': 'command', 'command': f'bash {hooks_dir}/post_tool_use.sh', 'async': True}]}]
+s['hooks']['Stop'] = [{'hooks': [{'type': 'command', 'command': f'bash {hooks_dir}/stop_hook.sh', 'async': True}]}]
+s['hooks']['SessionEnd'] = [{'hooks': [{'type': 'command', 'command': f'bash {hooks_dir}/session_end.sh', 'async': True}]}]
+with open('$SETTINGS', 'w') as f:
+    json.dump(s, f, indent=2)
+print('  Hooks wired into settings.json')
+"
 
-if [ "$STATUS" = "200" ]; then
-  echo "Connected successfully."
-elif [ "$STATUS" = "401" ]; then
-  echo "Error: Invalid API key. Get one at ${OB1_BASE_URL}/api-keys"
-  exit 1
+# Test Braintrust connection (auto-discovers key from MCP config)
+source "$HOOKS_DIR/common.sh" 2>/dev/null
+if tracing_enabled; then
+  PID=$(get_project_id 2>/dev/null)
+  if [ -n "$PID" ]; then
+    echo "  Braintrust connected (project: $PID)"
+  else
+    echo "  Warning: could not reach Braintrust. Check your API key."
+  fi
 else
-  echo "Warning: Could not verify connection (status=$STATUS). Continuing anyway."
+  echo "  Warning: no Braintrust API key found. Add the Braintrust MCP server or set BRAINTRUST_API_KEY."
 fi
 
-# Write settings
-SETTINGS_FILE="${HOME}/.claude/settings.local.json"
-if [ ! -f "$SETTINGS_FILE" ]; then
-  echo '{}' > "$SETTINGS_FILE"
-fi
-
-# Merge our env vars into settings.local.json
-jq --arg key "$OB1_API_KEY" --arg url "$OB1_BASE_URL" \
-  '.env = (.env // {}) + {OB1_API_KEY: $key, OB1_BASE_URL: $url}' \
-  "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp" && mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
-
 echo ""
-echo "==> Done! Configuration saved to $SETTINGS_FILE"
-echo ""
-echo "Your Claude Code sessions will now send traces to OB1 Console."
-echo "View them at: ${OB1_BASE_URL}/traces"
+echo "==> Done! Start a new Claude session to begin tracing."
