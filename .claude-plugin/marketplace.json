@@ -1,0 +1,18 @@
+{
+	"$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+	"name": "ob1-trace",
+	"version": "0.1.0",
+	"description": "OB1 Console plugin for Claude Code tracing and observability",
+	"owner": {
+		"name": "OpenBlock Labs",
+		"email": "team@openblocklabs.com"
+	},
+	"plugins": [
+		{
+			"name": "trace",
+			"description": "Automatically trace Claude Code sessions to OB1 Console via Braintrust. Captures sessions, conversation turns, and tool calls as hierarchical traces with team attribution.",
+			"source": "./plugins/trace",
+			"category": "observability"
+		}
+	]
+}

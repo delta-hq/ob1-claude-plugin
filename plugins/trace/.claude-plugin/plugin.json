@@ -1,0 +1,8 @@
+{
+	"name": "trace",
+	"description": "Automatically trace Claude Code sessions to OB1 Console. Captures sessions, turns, and tool calls as hierarchical traces with WorkOS team attribution.",
+	"version": "0.1.0",
+	"author": {
+		"name": "OpenBlock Labs"
+	}
+}
