@@ -163,16 +163,30 @@ insert_span() {
   payload=$(jq -n --argjson row "$row" '{rows: [$row], api_version: 2}')
 
   if [ -n "$OB1_API_KEY" ]; then
+    # Mode 1: OB1 Console proxy with WorkOS API key
     curl -sf -X POST "${OB1_API_URL}/logs3" \
       -H "Authorization: Bearer ${OB1_API_KEY}" \
       -H "X-User-Id: ${OB1_USER_ID:-}" \
       -H "Content-Type: application/json" \
       -d "$payload" 2>/dev/null
   elif [ -n "$BRAINTRUST_API_KEY" ]; then
-    curl -sf -X POST "https://api.braintrust.dev/logs3" \
+    # Mode 2: OB1 Console plugin-ingest endpoint (enriches metadata, uses caller's BT key)
+    local proxy_result
+    proxy_result=$(curl -sf -X POST "${OB1_API_URL}/plugin-ingest" \
       -H "Authorization: Bearer ${BRAINTRUST_API_KEY}" \
+      -H "X-User-Name: ${USER:-unknown}" \
       -H "Content-Type: application/json" \
-      -d "$payload" 2>/dev/null
+      -d "$payload" 2>/dev/null)
+
+    if [ -n "$proxy_result" ]; then
+      echo "$proxy_result"
+    else
+      # Mode 3: Direct Braintrust fallback (proxy unreachable)
+      curl -sf -X POST "https://api.braintrust.dev/logs3" \
+        -H "Authorization: Bearer ${BRAINTRUST_API_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "$payload" 2>/dev/null
+    fi
   fi
 }
 
