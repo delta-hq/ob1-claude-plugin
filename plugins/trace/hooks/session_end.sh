@@ -20,8 +20,8 @@ END_TIME=$(date +%s)
 # Merge end time into root span
 EVENT=$(jq -n \
   --arg id "$ROOT_SPAN_ID" \
-  --argjson end "$END_TIME" \
-  '{id: $id, _is_merge: true, metrics: {end: $end}}')
+  --argjson endtime "$END_TIME" \
+  '{id: $id, _is_merge: true, metrics: {"end": $endtime}}')
 
 insert_span "$PROJECT_ID" "$EVENT" >/dev/null && {
   log "INFO" "Session ended: $SESSION_ID"

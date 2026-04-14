@@ -29,7 +29,7 @@ EVENT=$(jq -n \
   --arg name "$TOOL_NAME" \
   --argjson input "$TOOL_INPUT" \
   --argjson output "$TOOL_OUTPUT" \
-  --argjson end "$END_TIME" \
+  --argjson endtime "$END_TIME" \
   '{
     id: $id,
     span_id: $id,
@@ -39,7 +39,7 @@ EVENT=$(jq -n \
     input: $input,
     output: $output,
     metadata: { tool_name: $name, source: "ob1_claude_code" },
-    metrics: { end: $end },
+    metrics: { "end": $endtime },
     span_attributes: { name: $name, type: "tool" }
   }')
 

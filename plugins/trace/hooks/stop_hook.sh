@@ -52,7 +52,7 @@ create_llm_span() {
     --argjson ctok "$ctok" \
     --argjson total "$total" \
     --argjson start "$start_epoch" \
-    --argjson end "$end_epoch" \
+    --argjson endtime "$end_epoch" \
     '{
       id: $id,
       span_id: $id,
@@ -63,7 +63,7 @@ create_llm_span() {
       metadata: { model: $model, source: "ob1_claude_code" },
       metrics: {
         start: $start,
-        end: $end,
+        "end": $endtime,
         prompt_tokens: $ptok,
         completion_tokens: $ctok,
         tokens: $total
@@ -116,7 +116,7 @@ done < "$CONV_FILE"
 
 # Update turn end time
 END_TIME=$(date +%s)
-TURN_UPDATE=$(jq -n --arg id "$TURN_SPAN_ID" --argjson end "$END_TIME" '{id: $id, _is_merge: true, metrics: {end: $end}}')
+TURN_UPDATE=$(jq -n --arg id "$TURN_SPAN_ID" --argjson endtime "$END_TIME" '{id: $id, _is_merge: true, metrics: {"end": $endtime}}')
 insert_span "$PROJECT_ID" "$TURN_UPDATE" >/dev/null || true
 
 set_session_state "$SESSION_ID" "turn_last_line" "$TOTAL_LINES"
