@@ -73,14 +73,15 @@ create_llm_span() {
   insert_span "$PROJECT_ID" "$event" >/dev/null && LLM_CALLS=$((LLM_CALLS + 1)) || true
 }
 
-# One jq pass over the new lines (was ~7 jq processes per transcript line,
-# which took minutes on transcripts with large base64 image lines).
+# One jq pass over lines added since the last Stop (was ~7 jq processes per
+# transcript line, which took minutes on transcripts with large base64 image
+# lines). Stops at TOTAL_LINES so lines written mid-run go to the next Stop.
 # Same rules as before: assistant lines accumulate text/model/tokens, a user
 # line flushes the span if it has text, and a final flush at the end. Each
 # text chunk drops trailing newlines, as the old $(jq -r ...) calls did.
 while IFS= read -r span; do
   [ -n "$span" ] && create_llm_span "$span"
-done < <(tail -n +"$((TURN_LAST_LINE + 1))" "$CONV_FILE" | jq -R -n -c '
+done < <(head -n "$TOTAL_LINES" "$CONV_FILE" 2>/dev/null | tail -n +"$((TURN_LAST_LINE + 1))" | jq -R -n -c '
   def rtrim_nl: explode | . as $a | (first(range(length - 1; -1; -1) | select($a[.] != 10)) // -1) as $i
                 | $a[:$i + 1] | implode;  # linear; sub("\n+$"; "") is quadratic on long newline runs
   def txt: (if type == "array" then [.[] | objects | select(.type == "text") | .text | strings] | join("\n")
