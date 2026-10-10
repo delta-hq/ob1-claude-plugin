@@ -109,7 +109,9 @@ TURN_UPDATE=$(jq -n --arg id "$TURN_SPAN_ID" --argjson endtime "$END_TIME" '{id:
 insert_span "$PROJECT_ID" "$TURN_UPDATE" >/dev/null || true
 
 set_session_state "$SESSION_ID" "turn_last_line" "$TOTAL_LINES"
-set_session_state "$SESSION_ID" "current_turn_span_id" ""
+# A newer UserPromptSubmit may have started the next turn already; keep its ID.
+[ "$(get_session_state "$SESSION_ID" "current_turn_span_id")" = "$TURN_SPAN_ID" ] && \
+  set_session_state "$SESSION_ID" "current_turn_span_id" ""
 
 [ "$LLM_CALLS" -gt 0 ] && log "INFO" "Created $LLM_CALLS LLM spans for turn"
 exit 0
