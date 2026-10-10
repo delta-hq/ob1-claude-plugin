@@ -89,7 +89,7 @@ create_llm_span() {
 while IFS= read -r span; do
   [ -n "$span" ] && create_llm_span "$span"
 done < <(tail -n +"$((TURN_LAST_LINE + 1))" "$CONV_FILE" | jq -R -n -c '
-  def txt: (if type == "array" then [.[] | select(.type == "text") | .text] | join("\n")
+  def txt: (if type == "array" then [.[] | objects | select(.type == "text") | .text | strings] | join("\n")
             elif type == "string" then . else "" end) | sub("\n+$"; "");
   def tok: (tonumber? // 0) | if . > 0 then . else 0 end;
   def flush: if .cur != null and .cur.text != "" then .out += [.cur] else . end | .cur = null;
