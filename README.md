@@ -24,4 +24,4 @@ If it prints `true` and the plugin is enabled, remove those hook entries from `s
 
 ## Requirements
 
-`jq`, `curl` and `python3` on `PATH`.
+`jq`, `curl`, `perl` and `python3` on `PATH`. macOS ships `perl`.
