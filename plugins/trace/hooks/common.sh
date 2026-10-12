@@ -135,12 +135,12 @@ get_project_id() {
   local pid
   if [ -n "$OB1_API_KEY" ]; then
     # Fetch from OB1 proxy
-    pid=$(curl -sf "${OB1_API_URL}/api/project" \
+    pid=$(curl -sf --max-time 30 "${OB1_API_URL}/api/project" \
       -H "Authorization: Bearer ${OB1_API_KEY}" \
       -H "X-User-Id: ${OB1_USER_ID:-}" | jq -r '.id // empty' 2>/dev/null)
   elif [ -n "$BRAINTRUST_API_KEY" ]; then
     # Fetch directly from Braintrust
-    pid=$(curl -sf "https://api.braintrust.dev/v1/project?limit=1" \
+    pid=$(curl -sf --max-time 30 "https://api.braintrust.dev/v1/project?limit=1" \
       -H "Authorization: Bearer ${BRAINTRUST_API_KEY}" | jq -r '.objects[0].id // empty' 2>/dev/null)
   fi
 
@@ -164,7 +164,7 @@ insert_span() {
 
   if [ -n "$OB1_API_KEY" ]; then
     # Mode 1: OB1 Console proxy with WorkOS API key
-    curl -sf -X POST "${OB1_API_URL}/logs3" \
+    curl -sf --max-time 30 -X POST "${OB1_API_URL}/logs3" \
       -H "Authorization: Bearer ${OB1_API_KEY}" \
       -H "X-User-Id: ${OB1_USER_ID:-}" \
       -H "Content-Type: application/json" \
@@ -172,7 +172,7 @@ insert_span() {
   elif [ -n "$BRAINTRUST_API_KEY" ]; then
     # Mode 2: OB1 Console plugin-ingest endpoint (enriches metadata, uses caller's BT key)
     local proxy_result
-    proxy_result=$(curl -sf -X POST "${OB1_API_URL}/plugin-ingest" \
+    proxy_result=$(curl -sf --max-time 30 -X POST "${OB1_API_URL}/plugin-ingest" \
       -H "Authorization: Bearer ${BRAINTRUST_API_KEY}" \
       -H "X-User-Name: ${USER:-unknown}" \
       -H "Content-Type: application/json" \
@@ -182,7 +182,7 @@ insert_span() {
       echo "$proxy_result"
     else
       # Mode 3: Direct Braintrust fallback (proxy unreachable)
-      curl -sf -X POST "https://api.braintrust.dev/logs3" \
+      curl -sf --max-time 30 -X POST "https://api.braintrust.dev/logs3" \
         -H "Authorization: Bearer ${BRAINTRUST_API_KEY}" \
         -H "Content-Type: application/json" \
         -d "$payload" 2>/dev/null
