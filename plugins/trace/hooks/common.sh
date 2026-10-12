@@ -8,15 +8,88 @@ set -e
 # ── Config ──────────────────────────────────────────────────────────────────
 
 # Mode 1: OB1 Console proxy (enriches with WorkOS identity)
-export OB1_BASE_URL="${OB1_BASE_URL:-https://console.openblocklabs.com}"
-export OB1_API_URL="${OB1_BASE_URL}/api/v1/braintrust"
+export OB1_BASE_URL="${OB1_BASE_URL:-}"
 export OB1_API_KEY="${OB1_API_KEY:-}"
+export OB1_ORG_ID="${OB1_ORG_ID:-}"
+export OB1_FORCE_PLUGIN_INGEST="${OB1_FORCE_PLUGIN_INGEST:-}"
 
 # Mode 2: Direct Braintrust (fallback when console isn't available)
 export BRAINTRUST_API_KEY="${BRAINTRUST_API_KEY:-}"
+export BRAINTRUST_PROJECT_ID="${BRAINTRUST_PROJECT_ID:-}"
+
+should_force_plugin_ingest() {
+  case "${OB1_FORCE_PLUGIN_INGEST:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Auto-discover OB1 credentials from Claude settings or ~/.ob1/credentials.json.
+# Claude hooks do not inherit the desktop extension's credential loading, so do
+# the same resolution here before falling back to a raw Braintrust key.
+if [ -z "$OB1_API_KEY" ] || [ -z "$OB1_ORG_ID" ] || [ -z "$OB1_BASE_URL" ] || [ -z "$BRAINTRUST_PROJECT_ID" ] || [ -z "$OB1_FORCE_PLUGIN_INGEST" ]; then
+  for _settings_file in "$HOME/.claude/settings.json" "$HOME/.claude/settings.local.json"; do
+    [ -f "$_settings_file" ] || continue
+    if [ -z "$OB1_BASE_URL" ]; then
+      _ob1_base_url=$(jq -r '.env.OB1_BASE_URL // empty' "$_settings_file" 2>/dev/null)
+      if [ -n "$_ob1_base_url" ]; then
+        OB1_BASE_URL="$_ob1_base_url"
+        export OB1_BASE_URL
+      fi
+    fi
+    if [ -z "$OB1_FORCE_PLUGIN_INGEST" ]; then
+      _ob1_force_plugin_ingest=$(jq -r '.env.OB1_FORCE_PLUGIN_INGEST // empty' "$_settings_file" 2>/dev/null)
+      if [ -n "$_ob1_force_plugin_ingest" ]; then
+        OB1_FORCE_PLUGIN_INGEST="$_ob1_force_plugin_ingest"
+        export OB1_FORCE_PLUGIN_INGEST
+      fi
+    fi
+    if [ -z "$BRAINTRUST_PROJECT_ID" ]; then
+      _braintrust_project_id=$(jq -r '.env.OB1_BRAINTRUST_PROJECT_ID // .env.BRAINTRUST_PROJECT_ID // empty' "$_settings_file" 2>/dev/null)
+      if [ -n "$_braintrust_project_id" ]; then
+        BRAINTRUST_PROJECT_ID="$_braintrust_project_id"
+        export BRAINTRUST_PROJECT_ID
+      fi
+    fi
+    if [ -z "$OB1_API_KEY" ] && ! should_force_plugin_ingest; then
+      _ob1_key=$(jq -r '.env.OB1_API_KEY // empty' "$_settings_file" 2>/dev/null)
+      if [ -n "$_ob1_key" ]; then
+        OB1_API_KEY="$_ob1_key"
+        export OB1_API_KEY
+      fi
+    fi
+    if [ -z "$OB1_ORG_ID" ]; then
+      _ob1_org=$(jq -r '.env.OB1_ORG_ID // empty' "$_settings_file" 2>/dev/null)
+      if [ -n "$_ob1_org" ]; then
+        OB1_ORG_ID="$_ob1_org"
+        export OB1_ORG_ID
+      fi
+    fi
+  done
+fi
+
+if { [ -z "$OB1_API_KEY" ] && ! should_force_plugin_ingest; } || [ -z "$OB1_ORG_ID" ]; then
+  _ob1_creds="$HOME/.ob1/credentials.json"
+  if [ -f "$_ob1_creds" ]; then
+    if [ -z "$OB1_API_KEY" ] && ! should_force_plugin_ingest; then
+      _ob1_key=$(jq -r '.default.api_key // empty' "$_ob1_creds" 2>/dev/null)
+      if [ -n "$_ob1_key" ]; then
+        OB1_API_KEY="$_ob1_key"
+        export OB1_API_KEY
+      fi
+    fi
+    if [ -z "$OB1_ORG_ID" ]; then
+      _ob1_org=$(jq -r '.oauth.organization_id // empty' "$_ob1_creds" 2>/dev/null)
+      if [ -n "$_ob1_org" ]; then
+        OB1_ORG_ID="$_ob1_org"
+        export OB1_ORG_ID
+      fi
+    fi
+  fi
+fi
 
 # Auto-discover Braintrust API key from Claude settings if not explicitly set
-if [ -z "$OB1_API_KEY" ] && [ -z "$BRAINTRUST_API_KEY" ]; then
+if [ -z "$BRAINTRUST_API_KEY" ]; then
   for _settings_file in "$HOME/.claude/settings.json" "$HOME/.claude/settings.local.json"; do
     [ -f "$_settings_file" ] || continue
     _found_key=$(jq -r '
@@ -36,6 +109,12 @@ if [ -z "$OB1_API_KEY" ] && [ -z "$BRAINTRUST_API_KEY" ]; then
     fi
   done
 fi
+
+if [ -z "$OB1_BASE_URL" ]; then
+  OB1_BASE_URL="https://console.openblocklabs.com"
+  export OB1_BASE_URL
+fi
+export OB1_API_URL="${OB1_BASE_URL}/api/v1/braintrust"
 
 # Logging
 LOG_DIR="${CLAUDE_PLUGIN_DATA:-${HOME}/.cache/ob1-trace}"
@@ -61,7 +140,11 @@ debug() {
 # ── Checks ──────────────────────────────────────────────────────────────────
 
 tracing_enabled() {
-  [ -n "$OB1_API_KEY" ] || [ -n "$BRAINTRUST_API_KEY" ]
+  if should_force_plugin_ingest; then
+    [ -n "$BRAINTRUST_API_KEY" ]
+  else
+    [ -n "$OB1_API_KEY" ] || [ -n "$BRAINTRUST_API_KEY" ]
+  fi
 }
 
 check_requirements() {
@@ -141,7 +224,7 @@ get_project_id() {
   fi
 
   local pid
-  if [ -n "$OB1_API_KEY" ]; then
+  if [ -n "$OB1_API_KEY" ] && ! should_force_plugin_ingest; then
     # Fetch from OB1 proxy
     pid=$(curl -sf --max-time 30 "${OB1_API_URL}/api/project" \
       -H "Authorization: Bearer ${OB1_API_KEY}" \
@@ -170,7 +253,7 @@ insert_span() {
   local payload
   payload=$(jq -n --argjson row "$row" '{rows: [$row], api_version: 2}')
 
-  if [ -n "$OB1_API_KEY" ]; then
+  if [ -n "$OB1_API_KEY" ] && ! should_force_plugin_ingest; then
     # Mode 1: OB1 Console proxy with WorkOS API key
     curl -sf --max-time 30 -X POST "${OB1_API_URL}/logs3" \
       -H "Authorization: Bearer ${OB1_API_KEY}" \
@@ -183,6 +266,7 @@ insert_span() {
     proxy_result=$(curl -sf --max-time 30 -X POST "${OB1_API_URL}/plugin-ingest" \
       -H "Authorization: Bearer ${BRAINTRUST_API_KEY}" \
       -H "X-User-Name: ${USER:-unknown}" \
+      ${OB1_ORG_ID:+-H "X-Org-Id: ${OB1_ORG_ID}"} \
       -H "Content-Type: application/json" \
       -d "$payload" 2>/dev/null)
 
