@@ -31,12 +31,15 @@ CONV_FILE=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 
 # Get last processed line for this turn
 TURN_LAST_LINE=$(get_session_state "$SESSION_ID" "turn_last_line")
-TURN_LAST_LINE=${TURN_LAST_LINE:-0}
 TOTAL_LINES=$(wc -l < "$CONV_FILE" | tr -d ' ')
 case "$TOTAL_LINES" in ''|*[!0-9]*) exit 0 ;; esac
+# Start from the top if there is no saved line or the transcript got shorter.
+case "$TURN_LAST_LINE" in ''|*[!0-9]*) TURN_LAST_LINE=0 ;; esac
+[ "$TURN_LAST_LINE" -gt "$TOTAL_LINES" ] && TURN_LAST_LINE=0
 
 # Scan for assistant messages (LLM calls) since last checkpoint
 LLM_CALLS=0
+LLM_FAILED=0
 
 # $1: one span from the transcript pass below, {text, model, pt, ct, ts}
 create_llm_span() {
@@ -70,24 +73,27 @@ create_llm_span() {
       span_attributes: { name: $model, type: "llm" }
     }')
 
-  insert_span "$PROJECT_ID" "$event" >/dev/null && LLM_CALLS=$((LLM_CALLS + 1)) || true
+  insert_span "$PROJECT_ID" "$event" >/dev/null && LLM_CALLS=$((LLM_CALLS + 1)) || LLM_FAILED=$((LLM_FAILED + 1))
 }
 
-# One jq pass over the new lines (was ~7 jq processes per transcript line,
-# which took minutes on transcripts with large base64 image lines).
+# One jq pass over lines added since the last Stop (was ~7 jq processes per
+# transcript line, which took minutes on transcripts with large base64 image
+# lines). Stops at TOTAL_LINES so lines written mid-run go to the next Stop.
 # Same rules as before: assistant lines accumulate text/model/tokens, a user
 # line flushes the span if it has text, and a final flush at the end. Each
 # text chunk drops trailing newlines, as the old $(jq -r ...) calls did.
+# Lines from another session are skipped: a resumed session's transcript starts
+# with the earlier session's lines, which were sent with that session.
 while IFS= read -r span; do
   [ -n "$span" ] && create_llm_span "$span"
-done < <(tail -n +"$((TURN_LAST_LINE + 1))" "$CONV_FILE" | jq -R -n -c '
+done < <(head -n "$TOTAL_LINES" "$CONV_FILE" 2>/dev/null | tail -n +"$((TURN_LAST_LINE + 1))" | jq -R -n -c --arg sid "$SESSION_ID" '
   def rtrim_nl: explode | . as $a | (first(range(length - 1; -1; -1) | select($a[.] != 10)) // -1) as $i
                 | $a[:$i + 1] | implode;  # linear; sub("\n+$"; "") is quadratic on long newline runs
   def txt: (if type == "array" then [.[] | objects | select(.type == "text") | .text | strings] | join("\n")
             elif type == "string" then . else "" end) | rtrim_nl;
   def tok: (tonumber? // 0) | if . > 0 then . else 0 end;
   def flush: if .cur != null and .cur.text != "" then .out += [.cur] else . end | .cur = null;
-  reduce (inputs | fromjson? | objects) as $l ({cur: null, out: []};
+  reduce (inputs | fromjson? | objects | select((.sessionId // $sid) == $sid)) as $l ({cur: null, out: []};
     . as $state | try (
       if $l.type == "assistant" then
         ($l.message | objects) // {} | . as $m
@@ -107,8 +113,14 @@ END_TIME=$(date +%s)
 TURN_UPDATE=$(jq -n --arg id "$TURN_SPAN_ID" --argjson endtime "$END_TIME" '{id: $id, _is_merge: true, metrics: {"end": $endtime}}')
 insert_span "$PROJECT_ID" "$TURN_UPDATE" >/dev/null || true
 
-set_session_state "$SESSION_ID" "turn_last_line" "$TOTAL_LINES"
-set_session_state "$SESSION_ID" "current_turn_span_id" ""
+# If every send failed (network down), keep the line so the next Stop retries.
+# current_turn_span_id stays set: a turn can go on after Stop (a Stop hook that
+# blocks, a queued message), and the next UserPromptSubmit replaces it.
+if [ "$LLM_FAILED" -gt 0 ] && [ "$LLM_CALLS" -eq 0 ]; then
+  log "WARN" "All $LLM_FAILED LLM span sends failed; the next Stop retries them"
+else
+  set_session_state "$SESSION_ID" "turn_last_line" "$TOTAL_LINES"
+fi
 
 [ "$LLM_CALLS" -gt 0 ] && log "INFO" "Created $LLM_CALLS LLM spans for turn"
 exit 0

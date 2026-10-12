@@ -42,7 +42,6 @@ EVENT=$(jq -n \
 insert_span "$PROJECT_ID" "$EVENT" >/dev/null && {
   set_session_state "$SESSION_ID" "current_turn_span_id" "$TURN_SPAN_ID"
   set_session_state "$SESSION_ID" "current_turn_start" "$START_TIME"
-  set_session_state "$SESSION_ID" "turn_last_line" "0"
   debug "Turn started: $TURN_SPAN_ID"
 } || true
 
