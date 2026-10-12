@@ -107,12 +107,20 @@ get_session_state() {
 set_session_state() {
   local sid="$1" key="$2" val="$3"
   local file="${SESSION_DIR}/${sid}.json"
-  if [ -f "$file" ]; then
-    local tmp=$(jq --arg k "$key" --arg v "$val" '.[$k] = $v' "$file" 2>/dev/null)
-    [ -n "$tmp" ] && echo "$tmp" > "$file"
-  else
-    jq -n --arg k "$key" --arg v "$val" '{($k): $v}' > "$file"
-  fi
+  local tmp="${SESSION_DIR}/.${sid}.$$.tmp.json"
+  # Hooks run in parallel. A per-session flock around the read-modify-write
+  # stops one hook from undoing another's write, and renaming a temp file into
+  # place means a reader never sees a half-written file. Either one made Stop
+  # lose the turn ID or go back to an old line and re-send spans.
+  {
+    perl -MFcntl=:flock -e 'open(my $fh, ">&=", 8) or exit 1; alarm 10; flock($fh, LOCK_EX)' 2>/dev/null || true
+    if [ -f "$file" ]; then
+      jq --arg k "$key" --arg v "$val" '.[$k] = $v' "$file" > "$tmp" 2>/dev/null || true
+    else
+      jq -n --arg k "$key" --arg v "$val" '{($k): $v}' > "$tmp" 2>/dev/null || true
+    fi
+    [ -s "$tmp" ] && mv -f "$tmp" "$file" || rm -f "$tmp"
+  } 8>>"${SESSION_DIR}/.${sid}.lock"
 }
 
 # ── Project ID (cached) ────────────────────────────────────────────────────
@@ -193,5 +201,5 @@ insert_span() {
 # ── Cleanup old sessions ───────────────────────────────────────────────────
 
 cleanup_sessions() {
-  find "$SESSION_DIR" -name "*.json" -mtime +7 -delete 2>/dev/null || true
+  find "$SESSION_DIR" \( -name "*.json" -o -name "*.lock" \) -mtime +7 -delete 2>/dev/null || true
 }
